@@ -17,12 +17,9 @@ else()
 	set(CMAKE_BUILD_TYPE Release)
 endif()
 
-find_package(JPEG REQUIRED)
-
 add_executable(${PROJECT_NAME} ${PROJECT_SOURCE_DIR}/${SOURCE_FILES})
 
-target_include_directories(${PROJECT_NAME} PRIVATE "${PROJECT_SOURCE_DIR}/yanderegllib"
-${JPEG_INCLUDE_DIRS})
+target_include_directories(${PROJECT_NAME} PRIVATE "${PROJECT_SOURCE_DIR}/yanderegllib")
 
 
 
@@ -36,5 +33,3 @@ if(${Y_DEBUG})
 else()
 	target_link_libraries(${PROJECT_NAME} -O3)
 endif()
-
-target_link_libraries(${PROJECT_NAME} ${JPEG_LIBRARIES})
