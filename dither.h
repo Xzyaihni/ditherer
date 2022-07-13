@@ -21,7 +21,9 @@ namespace dither
         color() {};
 
         color(const T r, const T g, const T b)
-        : r(r), g(g), b(b)
+        : r(std::clamp(r, static_cast<T>(0), static_cast<T>(255))),
+            g(std::clamp(g, static_cast<T>(0), static_cast<T>(255))),
+            b(std::clamp(b, static_cast<T>(0), static_cast<T>(255)))
         {
         }
 
@@ -150,20 +152,21 @@ namespace dither
         float distance(const color_lab& rhs) const noexcept;
     };
 
+    typedef std::vector<color<int>> colors_base;
     class parser
     {
     public:
-        typedef std::vector<color<int>> colors_type;
-
-        static colors_type parse_colors(const std::string colors) noexcept;
+        static colors_base parse_colors(std::string colors) noexcept;
+        static colors_base parse_colors(const std::filesystem::path path) noexcept;
     };
 
     class ditherer_base
     {
     public:
-        enum class dither_type{floyd_steinberg, atkinson, jarvis};
+        enum class dither_type{floyd_steinberg, atkinson, jarvis, ordered};
 
         ditherer_base();
+        ditherer_base(const yconv::image img);
         virtual ~ditherer_base() = default;
 
         static dither_type parse_type(const std::string str);
@@ -183,40 +186,85 @@ namespace dither
     class ditherer : public ditherer_base
     {
     public:
+        struct distrib_vals
+        {
+            int multiplier;
+            int x;
+            int y;
+        };
+
         typedef std::vector<T_color> colors_type;
 
         ditherer() {};
 
-        ditherer(const std::filesystem::path image_path, const std::string colors)
-        : _colors_base(parser::parse_colors(colors))
+        ditherer(const yconv::image image, const colors_base colors)
+        : ditherer_base(image), _colors_base(colors)
         {
-            if(!std::filesystem::exists(image_path))
-                throw std::runtime_error(std::string("file not found: ")+image_path.string());
-
-            if(yconv::image::can_parse(image_path.extension().string()))
-            {
-                _image = yconv::image(image_path);
-            } else
-            {
-                if(image_path.extension()==".jpeg" || image_path.extension()==".jpg")
-                {
-                    //TODO THIS
-                } else
-                {
-                    throw std::runtime_error(std::string("cant parse: ")+image_path.string());
-                }
-            }
-
             _colors.reserve(_colors_base.size());
             for(const auto& c : _colors_base)
                 _colors.emplace_back(T_color{c});
         }
 
-        yconv::image dither(const dither_type type) const
+        yconv::image dither(const dither_type type, const float error_mult = 1) const
         {
             if(_image.bpp!=3 && _image.bpp!=4)
                 throw std::runtime_error(std::string("cant dither image with bits per pixel value: ") + std::to_string(_image.bpp));
 
+            switch(type)
+            {
+                case dither_type::ordered:
+                return dither_ordered(std::vector<float>{0.25f, 0.5f, 0.75f, 1.0f}, 2, error_mult);
+
+                case dither_type::floyd_steinberg:
+                case dither_type::atkinson:
+                case dither_type::jarvis:
+                default:
+                return dither_generic(type, error_mult);
+            }
+        }
+
+    private:
+        yconv::image dither_ordered(const std::vector<float> pattern, const int p_width, const float error_mult) const
+        {
+            /*const int p_height = pattern.size()/p_width;
+
+            std::vector<uint8_t> data;
+
+            data.reserve(_image.width*_image.height*_image.bpp);
+            for(int y = 0; y < _image.height; ++y)
+            {
+                for(int x = 0; x < _image.width; ++x)
+                {
+                    const color<int> c = color<int>{
+                        _image.pixel_color(x, y, 0),
+                        _image.pixel_color(x, y, 1),
+                        _image.pixel_color(x, y, 2)};
+
+                    const color<int> error{0, 0, 0};
+                    for(int p = 0; p < pattern.size(); ++p)
+                    {
+                        const color<int> test_color = c + error;
+                        const color<int> closest_color = nearest_color(T_color(test_color));
+
+                    }
+
+                    data.emplace_back();
+                    data.emplace_back();
+                    data.emplace_back();
+
+                    if(_image.bpp==4)
+                    {
+                        data.emplace_back(_image.pixel_color(x, y, 3));
+                    }
+                }
+            }
+
+            return yconv::image(_image.width, _image.height, _image.bpp, data);*/
+            //TODO
+        }
+
+        yconv::image dither_generic(const dither_type type, const float error_mult) const
+        {
             const size_t img_size = _image.width*_image.height*_image.bpp;
 
             std::vector<color<float>> errors(img_size);
@@ -228,86 +276,81 @@ namespace dither
             {
                 for(int x = 0; x < _image.width; ++x)
                 {
-                    const color<float> c = errors[y*_image.width+x] + color<float>{
+                    const color<float> c = (errors[y*_image.width+x]*error_mult)
+                        + color<float>{
                         static_cast<float>(_image.pixel_color(x, y, 0)),
                         static_cast<float>(_image.pixel_color(x, y, 1)),
                         static_cast<float>(_image.pixel_color(x, y, 2))};
 
-                    const color<int> out_color = nearest_color(T_color{c});
+                        const color<int> out_color = nearest_color(T_color{c});
 
-                    const color<float> error = c-out_color.cast<float>();
+                        const color<float> error = c-out_color.cast<float>();
 
-                    switch(type)
-                    {
-                        case dither_type::floyd_steinberg:
-                            error_floyd_steinberg(errors, error, x, y);
-                        break;
+                        switch(type)
+                        {
+                            case dither_type::floyd_steinberg:
+                                error_mapped(16, std::vector<distrib_vals>{
+                                    {7, 1, 0},
+                                    {5, 0, 1},
+                                    {3, -1, 1},
+                                    {1, 1, 1}},
+                                    errors, error, x, y);
+                                break;
 
-                        case dither_type::atkinson:
-                            error_atkinson(errors, error, x, y);
-                        break;
+                            case dither_type::atkinson:
+                                error_mapped(8, std::vector<distrib_vals>{
+                                    {1, 0, 1},
+                                    {1, 0, 2},
+                                    {1, 1, 0},
+                                    {1, 1, 1},
+                                    {1, 2, 0},
+                                    {1, -1, 1}},
+                                    errors, error, x, y);
+                                break;
 
-                        case dither_type::jarvis:
-                            error_jarvis(errors, error, x, y);
-                        break;
+                            case dither_type::jarvis:
+                                error_mapped(48, std::vector<distrib_vals>{
+                                    {7, 1, 0},
+                                    {5, 2, 0},
+                                    {3, -2, 1},
+                                    {5, -1, 1},
+                                    {7, 0, 1},
+                                    {5, 1, 1},
+                                    {3, 2, 1},
+                                    {1, -2, 2},
+                                    {3, -1, 2},
+                                    {5, 0, 2},
+                                    {3, 1, 2},
+                                    {1, 2, 2}},
+                                    errors, error, x, y);
+                                break;
 
-                        default:
-                            throw std::runtime_error("unsupported dither type (how did u do that?)");
-                    }
+                            default:
+                                throw std::runtime_error("unsupported dither type (how did u do that?)");
+                        }
 
-                    data.emplace_back(out_color.r);
-                    data.emplace_back(out_color.g);
-                    data.emplace_back(out_color.b);
+                        data.emplace_back(out_color.r);
+                        data.emplace_back(out_color.g);
+                        data.emplace_back(out_color.b);
 
-                    if(_image.bpp==4)
-                    {
-                        data.emplace_back(_image.pixel_color(x, y, 3));
-                    }
+                        if(_image.bpp==4)
+                        {
+                            data.emplace_back(_image.pixel_color(x, y, 3));
+                        }
                 }
             }
 
             return yconv::image(_image.width, _image.height, _image.bpp, data);
         }
 
-    private:
-        void error_floyd_steinberg(std::vector<color<float>>& errors, const color<float> error, const int x, const int y) const noexcept
+        void error_mapped(const float divisor, const std::vector<distrib_vals> distrib_map,
+            std::vector<color<float>>& errors, const color<float> error, const int x, const int y) const noexcept
         {
-            const color<float> val = error * (1/16.0f);
+            const color<float> val = error * (1/divisor);
 
-            error_distribute(errors, val*7, x, y, 1, 0);
-            error_distribute(errors, val*3, x, y, -1, 1);
-            error_distribute(errors, val*5, x, y, 0, 1);
-            error_distribute(errors, val, x, y, 1, 1);
-        }
-
-        void error_atkinson(std::vector<color<float>>& errors, const color<float> error, const int x, const int y) const noexcept
-        {
-            const color<float> val = error * (1/8.0f);
-
-            error_distribute(errors, val, x, y, 1, 0);
-            error_distribute(errors, val, x, y, 2, 0);
-            error_distribute(errors, val, x, y, -1, 1);
-            error_distribute(errors, val, x, y, 0, 1);
-            error_distribute(errors, val, x, y, 1, 1);
-            error_distribute(errors, val, x, y, 0, 2);
-        }
-
-        void error_jarvis(std::vector<color<float>>& errors, const color<float> error, const int x, const int y) const noexcept
-        {
-            const color<float> val = error * (1/48.0f);
-
-            error_distribute(errors, val*7, x, y, 1, 0);
-            error_distribute(errors, val*5, x, y, 2, 0);
-            error_distribute(errors, val*3, x, y, -2, 1);
-            error_distribute(errors, val*5, x, y, -1, 1);
-            error_distribute(errors, val*7, x, y, 0, 1);
-            error_distribute(errors, val*5, x, y, 1, 1);
-            error_distribute(errors, val*3, x, y, 2, 1);
-            error_distribute(errors, val, x, y, -2, 2);
-            error_distribute(errors, val*3, x, y, -1, 2);
-            error_distribute(errors, val*5, x, y, 0, 2);
-            error_distribute(errors, val*3, x, y, 1, 2);
-            error_distribute(errors, val, x, y, 2, 2);
+            for(const auto& d_val : distrib_map)
+                error_distribute(errors, val*d_val.multiplier, x, y,
+                    d_val.x, d_val.y);
         }
 
         void error_distribute(std::vector<color<float>>& errors, const color<float> error, const int x, const int y, const int x_d, const int y_d) const noexcept
@@ -346,8 +389,8 @@ namespace dither
         }
 
         colors_type _colors;
-        std::vector<color<int>> _colors_base;
-};
+        colors_base _colors_base;
+    };
 };
 
 #endif

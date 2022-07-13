@@ -1,5 +1,8 @@
 #include <iostream>
+#include <fstream>
+#include <sstream>
 
+#include "generic.h"
 #include "dither.h"
 
 
@@ -18,10 +21,7 @@ color_xyz::color_xyz(const float X, const float Y, const float Z)
 
 color_xyz::color_xyz(const color<float>& c)
 {
-	const color<float> c_f{
-		std::clamp(c.r/255.0f, 0.0f, 1.0f),
-		std::clamp(c.g/255.0f, 0.0f, 1.0f),
-		std::clamp(c.b/255.0f, 0.0f, 1.0f)};
+	const color<float> c_f{c.r/255.0f, c.g/255.0f, c.b/255.0f};
 
 	const auto linearize = [](const float n){return std::pow((n+0.055f)/1.055f, 2.4f);};
 
@@ -89,8 +89,10 @@ float color_lab::distance(const color_lab& rhs) const noexcept
 	+ std::abs(b-rhs.b);
 }
 
-parser::colors_type parser::parse_colors(const std::string colors) noexcept
+colors_base parser::parse_colors(std::string colors) noexcept
 {
+	colors += ',';
+
 	std::vector<uint8_t> colors_vec;
 
 	std::string last_number = "";
@@ -121,11 +123,9 @@ parser::colors_type parser::parse_colors(const std::string colors) noexcept
 		}
 	}
 
-	colors_vec.push_back(std::stoi(last_number));
-
 	const int colors_amount = colors_vec.size();
 
-	colors_type parsed_colors;
+	colors_base parsed_colors;
 	parsed_colors.reserve(colors_amount/3);
 
 	for(int i = 0; i < colors_amount; i+=3)
@@ -134,7 +134,17 @@ parser::colors_type parser::parse_colors(const std::string colors) noexcept
 	return parsed_colors;
 }
 
+colors_base parser::parse_colors(const std::filesystem::path path) noexcept
+{
+	return parse_colors(generic::parse_file(path));
+}
+
 ditherer_base::ditherer_base()
+{
+}
+
+ditherer_base::ditherer_base(const yconv::image img)
+: _image(img)
 {
 }
 
@@ -149,6 +159,9 @@ ditherer_base::dither_type ditherer_base::parse_type(const std::string str)
 	} else if(str=="jarvis")
 	{
 		return dither_type::jarvis;
+	} else if(str=="ordered")
+	{
+		return dither_type::ordered;
 	} else
 	{
 		throw std::runtime_error(std::string("unknown dither type: ") + str);
