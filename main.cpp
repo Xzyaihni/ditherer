@@ -160,7 +160,8 @@ int main(int argc, char* argv[])
 		parser::parse_colors(argument_colors)
 		: parser::parse_colors(std::filesystem::path(argument_colors_path));
 
-	const yconv::image img{image_path};
+	yconv::image img{image_path};
+	img.bpp_resize(3);
 	if(argument_compare_func=="RGB")
 	{
 		ditherer<color<int>> c_dither(img, dither_colors);

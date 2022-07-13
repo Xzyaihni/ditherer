@@ -85,7 +85,7 @@ int main(int argc, char* argv[])
 		parser::parse_pairs(argument_colors)
 		: parser::parse_pairs(std::filesystem::path(argument_colors_path));
 
-	yconv::image img = yconv::image(image_path);
+	yconv::image img{image_path};
 	img.bpp_resize(3);
 	const std::string out_string = converter::convert(img, pairs);
 
